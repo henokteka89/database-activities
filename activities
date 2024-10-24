@@ -1,0 +1,99 @@
+Active Sessions and Queries: Use the sys.dm_exec_requests DMV to see current running queries and their statuses:
+
+SELECT 
+    session_id, 
+    start_time, 
+    status, 
+    command, 
+    wait_type, 
+    wait_time, 
+    blocking_session_id, 
+    text AS query_text
+FROM 
+    sys.dm_exec_requests
+CROSS APPLY 
+    sys.dm_exec_sql_text(sql_handle);
+
+
+Blocked Sessions: Check for blocking with this query
+SELECT 
+    blocking_session_id AS BlockingSession, 
+    session_id AS BlockedSession, 
+    wait_type, 
+    wait_time, 
+    wait_resource, 
+    text AS BlockedQuery 
+FROM 
+    sys.dm_exec_requests
+CROSS APPLY 
+    sys.dm_exec_sql_text(sql_handle)
+WHERE 
+    blocking_session_id <> 0;
+
+
+Long-Running Queries: Identify queries that are taking longer than a specific threshold (e.g., 1 minute):
+
+SELECT 
+    session_id, 
+    start_time, 
+    DATEDIFF(SECOND, start_time, GETDATE()) AS DurationSeconds, 
+    text AS LongRunningQuery 
+FROM 
+    sys.dm_exec_requests
+CROSS APPLY 
+    sys.dm_exec_sql_text(sql_handle)
+WHERE 
+    DATEDIFF(SECOND, start_time, GETDATE()) > 60;
+
+Wait Statistics: Check which types of waits are impacting the system the most:
+
+SELECT 
+    wait_type, 
+    wait_time_ms / 1000.0 AS WaitTimeSeconds, 
+    waiting_tasks_count, 
+    (wait_time_ms / 1000.0) / waiting_tasks_count AS AvgWaitTimePerTaskSeconds
+FROM 
+    sys.dm_os_wait_stats
+ORDER BY 
+    WaitTimeSeconds DESC;
+
+
+System Resource Usage: View resource utilization (CPU, memory, etc.) with:
+SELECT 
+    SQLProcessUtilization, 
+    SystemIdleProcess, 
+    100 - SystemIdleProcess - SQLProcessUtilization AS OtherProcesses 
+FROM 
+    sys.dm_os_ring_buffers 
+WHERE 
+    ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+    AND record_id = (SELECT MAX(record_id) FROM sys.dm_os_ring_buffers 
+                     WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR');
+
+Identify Top CPU-Consuming Queries:
+SELECT 
+    TOP 5 
+    total_worker_time / 1000 AS CPUTime_ms, 
+    execution_count, 
+    text AS Query 
+FROM 
+    sys.dm_exec_query_stats
+CROSS APPLY 
+    sys.dm_exec_sql_text(sql_handle)
+ORDER BY 
+    total_worker_time DESC;
+
+Database File I/O and Latency: Identify which files or drives are experiencing the most I/O waits:
+SELECT 
+    DB_NAME(fs.database_id) AS DatabaseName,
+    mf.name AS LogicalName,
+    mf.physical_name,
+    io_stall_read_ms, 
+    num_of_reads, 
+    io_stall_write_ms, 
+    num_of_writes
+FROM 
+    sys.dm_io_virtual_file_stats(NULL, NULL) AS fs
+JOIN 
+    sys.master_files AS mf ON fs.database_id = mf.database_id 
+    AND fs.file_id = mf.file_id;
